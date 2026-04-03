@@ -21,3 +21,14 @@ In this phase, we collect data in real-time without using any machine learning m
 This phase ensures that real-time data is available quickly for further analysis.
 
 > Note: All sensitive data is masked or simulated for safety.
+
+## 🧠 Phase 2: NLP Processing 
+
+In this phase, we add AI capabilities to analyze the collected data.
+
+- Used spaCy (en_core_web_sm) for detecting entities like emails, organizations, and credentials.
+- Used BART (bart-large-mnli) for classifying threats (leak, phishing, malware, etc.).
+- The system analyzes text and assigns a threat level with confidence score.
+- Models are loaded efficiently to keep memory usage low.
+
+This phase helps in understanding and identifying potential cybersecurity threats from raw data.
