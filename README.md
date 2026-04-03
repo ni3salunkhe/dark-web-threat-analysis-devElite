@@ -8,3 +8,27 @@ Saurabh Chilamshettiwar,
 Aditya Patil.
 
 Hackup 2026 - 24 hours hackathon at A.C Patil college ,Navi mumbai 
+
+# 🚀 Phase 1: Data Collection (0–3 Hours)
+
+In this phase, we collect data in real-time without using any machine learning models.
+
+- Fast async scrapers are used to fetch data from sources like GitHub.
+- It helps find exposed credentials, API keys, and sensitive information.
+- The collected data is stored directly in a SQLite database.
+- The system keeps updating automatically to simulate live monitoring.
+
+This phase ensures that real-time data is available quickly for further analysis.
+
+> Note: All sensitive data is masked or simulated for safety.
+
+## 🧠 Phase 2: NLP Processing 
+
+In this phase, we add AI capabilities to analyze the collected data.
+
+- Used spaCy (en_core_web_sm) for detecting entities like emails, organizations, and credentials.
+- Used BART (bart-large-mnli) for classifying threats (leak, phishing, malware, etc.).
+- The system analyzes text and assigns a threat level with confidence score.
+- Models are loaded efficiently to keep memory usage low.
+
+This phase helps in understanding and identifying potential cybersecurity threats from raw data.

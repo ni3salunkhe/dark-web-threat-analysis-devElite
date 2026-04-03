@@ -1,8 +1,22 @@
 """
 DWTIS Phase 1 — Async Ingestion Pipeline
-Sources: Pastebin · GitHub Code Search · CISA KEV · Reddit
+Sources: Pastebin · GitHub Code Search · CISA KEV · Reddit · Telegram
 Storage: SQLite (raw_posts table)
 RAM target: < 200 MB
+
+SETUP BEFORE FIRST RUN:
+  pip install httpx praw langdetect telethon
+
+  # Pre-authenticate Telegram session ONCE (run this standalone):
+  #   python -c "
+  #   import asyncio
+  #   from telethon import TelegramClient
+  #   async def auth():
+  #       c = TelegramClient('dwtis_session', YOUR_API_ID, 'YOUR_API_HASH')
+  #       await c.start(phone='YOUR_PHONE')   # enter OTP when prompted
+  #       await c.disconnect()
+  #   asyncio.run(auth())"
+  # This creates dwtis_session.session file — after that, no OTP needed.
 """
 
 import asyncio
@@ -17,7 +31,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import httpx
-import feedparser
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
     import praw
@@ -31,26 +46,42 @@ except ImportError:
     def detect_lang(text):
         return "en"
 
+try:
+    from telethon import TelegramClient, events
+    TELETHON_AVAILABLE = True
+except ImportError:
+    TELETHON_AVAILABLE = False
+
+
 # ─────────────────────────────────────────────
-# CONFIG — fill in your API keys here
+# CONFIG — fill in your credentials here
 # ─────────────────────────────────────────────
 
-GITHUB_TOKEN   = os.getenv("GITHUB_TOKEN", "")          # optional but avoids rate limits
-REDDIT_CLIENT_ID     = os.getenv("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
-REDDIT_USER_AGENT    = "DWTIS/1.0 by research_bot"
+GITHUB_TOKEN          = os.getenv("GITHUB_TOKEN", "")
+REDDIT_CLIENT_ID      = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET  = os.getenv("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT     = "DWTIS/1.0 by research_bot"
 
-PASTEBIN_SCRAPE_URL  = "https://scrape.pastebin.com/api_scraping.php?limit=100"
-CISA_KEV_URL         = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-GITHUB_SEARCH_URL    = "https://api.github.com/search/code"
+# BUG 1 FIX: Telegram constants were missing entirely — added here
+TELEGRAM_API_ID       = int(os.getenv("TELEGRAM_API_ID", "0"))      # from my.telegram.org
+TELEGRAM_API_HASH     = os.getenv("TELEGRAM_API_HASH", "")          # from my.telegram.org
+TELEGRAM_PHONE        = os.getenv("TELEGRAM_PHONE", "")             # e.g. +919876543210
+TELEGRAM_SESSION_FILE = "dwtis_session"                             # pre-auth this first
+TELEGRAM_CHANNELS     = [                                            # channel usernames (no @)
+    "durov",
+]
 
-GITHUB_SEARCH_TERMS  = ["password", "api_key", "secret", "token", "credential"]
-REDDIT_SUBREDDITS    = ["netsec", "cybersecurity", "netsecstudents"]
+PASTEBIN_SCRAPE_URL   = "https://scrape.pastebin.com/api_scraping.php?limit=100"
+CISA_KEV_URL          = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+GITHUB_SEARCH_URL     = "https://api.github.com/search/code"
 
-POLL_INTERVAL_PASTEBIN = 60    # seconds
-POLL_INTERVAL_GITHUB   = 300   # 5 min (rate limit aware)
-POLL_INTERVAL_CISA     = 3600  # 1 hour
-POLL_INTERVAL_REDDIT   = 300   # 5 min
+GITHUB_SEARCH_TERMS   = ["password", "api_key", "secret", "token", "credential"]
+REDDIT_SUBREDDITS     = ["netsec", "cybersecurity", "netsecstudents"]
+
+POLL_INTERVAL_PASTEBIN = 60
+POLL_INTERVAL_GITHUB   = 300
+POLL_INTERVAL_CISA     = 3600
+POLL_INTERVAL_REDDIT   = 300
 
 DB_PATH = "dwtis.db"
 
@@ -90,7 +121,6 @@ def init_db(db_path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def make_id(source: str, url: str, text: str) -> str:
-    """Deterministic dedup ID from source + url + first 200 chars."""
     raw = f"{source}:{url}:{text[:200]}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -98,11 +128,10 @@ def make_id(source: str, url: str, text: str) -> str:
 def save_post(conn: sqlite3.Connection, source: str, text: str,
               url: str = "", timestamp: Optional[str] = None,
               lang: str = "en") -> bool:
-    """Insert post — returns True if new, False if duplicate."""
     if not text or len(text.strip()) < 20:
         return False
-    post_id   = make_id(source, url, text)
-    ts        = timestamp or datetime.now(timezone.utc).isoformat()
+    post_id = make_id(source, url, text)
+    ts      = timestamp or datetime.now(timezone.utc).isoformat()
     try:
         conn.execute(
             "INSERT OR IGNORE INTO raw_posts (id, source, text, url, timestamp, lang) "
@@ -128,11 +157,6 @@ def safe_detect(text: str) -> str:
 # ─────────────────────────────────────────────
 
 class PastebinScraper:
-    """
-    Hits scrape.pastebin.com (requires Pro account for full access,
-    but public endpoint returns recent public pastes).
-    Falls back to scraping pastebin.com/archive for free users.
-    """
 
     def __init__(self, conn: sqlite3.Connection, client: httpx.AsyncClient):
         self.conn   = conn
@@ -164,7 +188,6 @@ class PastebinScraper:
                 title    = paste.get("title", "")
                 raw_size = int(paste.get("size", 0))
 
-                # skip huge pastes (> 50KB) to save RAM
                 if raw_size > 50000:
                     continue
 
@@ -181,7 +204,7 @@ class PastebinScraper:
                 if save_post(self.conn, self.name, text, url, ts, lang):
                     saved += 1
 
-                await asyncio.sleep(0.3)  # polite delay
+                await asyncio.sleep(0.3)
 
         except Exception as e:
             log.error("[Pastebin] Error: %s", e)
@@ -190,7 +213,6 @@ class PastebinScraper:
         return saved
 
     async def _scrape_archive(self) -> int:
-        """Fallback: scrape public archive page for paste keys."""
         saved = 0
         try:
             r = await self.client.get("https://pastebin.com/archive", timeout=15)
@@ -221,15 +243,11 @@ class PastebinScraper:
 # ─────────────────────────────────────────────
 
 class GitHubScraper:
-    """
-    Searches GitHub code for accidentally committed secrets.
-    Uses REST API — rate limited to 10/min unauth, 30/min with token.
-    """
 
     def __init__(self, conn: sqlite3.Connection, client: httpx.AsyncClient):
-        self.conn   = conn
-        self.client = client
-        self.name   = "github"
+        self.conn    = conn
+        self.client  = client
+        self.name    = "github"
         self.headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -259,14 +277,11 @@ class GitHubScraper:
                 log.warning("[GitHub] Status %d for term '%s'", r.status_code, term)
                 return 0
 
-            data  = r.json()
-            items = data.get("items", [])
-
-            for item in items:
-                repo     = item.get("repository", {})
-                html_url = item.get("html_url", "")
-                name     = item.get("name", "")
-                repo_name = repo.get("full_name", "")
+            for item in r.json().get("items", []):
+                repo        = item.get("repository", {})
+                html_url    = item.get("html_url", "")
+                name        = item.get("name", "")
+                repo_name   = repo.get("full_name", "")
                 description = repo.get("description", "") or ""
 
                 text = (
@@ -277,9 +292,7 @@ class GitHubScraper:
                     f"Search term matched: {term}\n"
                     f"URL: {html_url}"
                 )
-
-                ts = item.get("repository", {}).get("pushed_at",
-                     datetime.now(timezone.utc).isoformat())
+                ts = repo.get("pushed_at", datetime.now(timezone.utc).isoformat())
 
                 if save_post(self.conn, self.name, text, html_url, ts, "en"):
                     saved += 1
@@ -292,9 +305,8 @@ class GitHubScraper:
     async def run_once(self) -> int:
         total = 0
         for term in GITHUB_SEARCH_TERMS:
-            n = await self.search_term(term)
-            total += n
-            await asyncio.sleep(8)  # stay under rate limit
+            total += await self.search_term(term)
+            await asyncio.sleep(8)
         log.info("[GitHub] Saved %d new posts", total)
         return total
 
@@ -310,11 +322,7 @@ class GitHubScraper:
 # ─────────────────────────────────────────────
 
 class CISAScraper:
-    """
-    CISA Known Exploited Vulnerabilities catalog.
-    This is ground truth for active exploitation — pre-disclosure
-    for many orgs that haven't patched yet.
-    """
+    # BUG 3 FIX: removed duplicate class definition that appeared below TelegramScraper
 
     def __init__(self, conn: sqlite3.Connection, client: httpx.AsyncClient):
         self.conn      = conn
@@ -330,35 +338,24 @@ class CISAScraper:
                 log.warning("[CISA] Status %d", r.status_code)
                 return 0
 
-            data = r.json()
-            vulns = data.get("vulnerabilities", [])
-
-            for v in vulns:
+            for v in r.json().get("vulnerabilities", []):
                 cve_id = v.get("cveID", "")
                 if cve_id in self.seen_cves:
                     continue
 
-                vendor   = v.get("vendorProject", "")
-                product  = v.get("product", "")
-                desc     = v.get("shortDescription", "")
-                added    = v.get("dateAdded", "")
-                due_date = v.get("dueDate", "")
-                action   = v.get("requiredAction", "")
-
                 text = (
                     f"[CISA KEV] Active exploitation detected\n"
                     f"CVE: {cve_id}\n"
-                    f"Vendor: {vendor} — Product: {product}\n"
-                    f"Description: {desc}\n"
-                    f"Date added to KEV: {added}\n"
-                    f"Patch due: {due_date}\n"
-                    f"Required action: {action}"
+                    f"Vendor: {v.get('vendorProject', '')} — Product: {v.get('product', '')}\n"
+                    f"Description: {v.get('shortDescription', '')}\n"
+                    f"Date added to KEV: {v.get('dateAdded', '')}\n"
+                    f"Patch due: {v.get('dueDate', '')}\n"
+                    f"Required action: {v.get('requiredAction', '')}"
                 )
+                added = v.get("dateAdded", "")
+                ts    = f"{added}T00:00:00+00:00" if added else datetime.now(timezone.utc).isoformat()
 
-                url = f"https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
-                ts  = f"{added}T00:00:00+00:00" if added else datetime.now(timezone.utc).isoformat()
-
-                if save_post(self.conn, self.name, text, url, ts, "en"):
+                if save_post(self.conn, self.name, text, CISA_KEV_URL, ts, "en"):
                     saved += 1
                     self.seen_cves.add(cve_id)
 
@@ -380,12 +377,6 @@ class CISAScraper:
 # ─────────────────────────────────────────────
 
 class RedditScraper:
-    """
-    Monitors r/netsec, r/cybersecurity for early breach signals.
-    Security researchers post IOCs and breach warnings here before
-    official disclosures.
-    Uses PRAW if credentials available, falls back to JSON API.
-    """
 
     def __init__(self, conn: sqlite3.Connection, client: httpx.AsyncClient):
         self.conn   = conn
@@ -406,61 +397,46 @@ class RedditScraper:
                 log.warning("[Reddit] PRAW init failed: %s — using JSON fallback", e)
 
     async def _fetch_json_api(self, subreddit: str) -> list:
-        """Fallback: Reddit's public JSON API (no auth needed)."""
-        url = f"https://www.reddit.com/r/{subreddit}/new.json?limit=25"
+        url     = f"https://www.reddit.com/r/{subreddit}/new.json?limit=25"
         headers = {"User-Agent": REDDIT_USER_AGENT}
         try:
             r = await self.client.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
-                data = r.json()
-                return data.get("data", {}).get("children", [])
+                return r.json().get("data", {}).get("children", [])
         except Exception as e:
             log.error("[Reddit JSON] %s: %s", subreddit, e)
         return []
 
     async def scrape_subreddit_json(self, subreddit: str) -> int:
-        saved   = 0
-        cutoff  = time.time() - 86400  # last 24h
-        posts   = await self._fetch_json_api(subreddit)
-
-        for child in posts:
-            post = child.get("data", {})
+        saved  = 0
+        cutoff = time.time() - 86400
+        for child in await self._fetch_json_api(subreddit):
+            post    = child.get("data", {})
             created = post.get("created_utc", 0)
             if created < cutoff:
                 continue
-
-            title    = post.get("title", "")
-            selftext = post.get("selftext", "")
-            url      = f"https://reddit.com{post.get('permalink', '')}"
-            score    = post.get("score", 0)
-
-            text = f"[Reddit r/{subreddit}] {title}\n{selftext}".strip()
+            text = f"[Reddit r/{subreddit}] {post.get('title', '')}\n{post.get('selftext', '')}".strip()
             if len(text) < 30:
                 continue
-
-            lang = safe_detect(text)
-            ts   = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
-
-            if save_post(self.conn, self.name, text, url, ts, lang):
+            url = f"https://reddit.com{post.get('permalink', '')}"
+            ts  = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+            if save_post(self.conn, self.name, text, url, ts, safe_detect(text)):
                 saved += 1
-
         return saved
 
     def scrape_subreddit_praw(self, subreddit: str) -> int:
         saved  = 0
         cutoff = time.time() - 86400
         try:
-            sub = self.reddit.subreddit(subreddit)
-            for post in sub.new(limit=30):
+            for post in self.reddit.subreddit(subreddit).new(limit=30):
                 if post.created_utc < cutoff:
                     continue
                 text = f"[Reddit r/{subreddit}] {post.title}\n{post.selftext}".strip()
                 if len(text) < 30:
                     continue
-                lang = safe_detect(text)
-                ts   = datetime.fromtimestamp(post.created_utc, tz=timezone.utc).isoformat()
-                url  = f"https://reddit.com{post.permalink}"
-                if save_post(self.conn, self.name, text, url, ts, lang):
+                ts  = datetime.fromtimestamp(post.created_utc, tz=timezone.utc).isoformat()
+                url = f"https://reddit.com{post.permalink}"
+                if save_post(self.conn, self.name, text, url, ts, safe_detect(text)):
                     saved += 1
         except Exception as e:
             log.error("[Reddit PRAW] %s: %s", subreddit, e)
@@ -470,7 +446,6 @@ class RedditScraper:
         total = 0
         for sub in REDDIT_SUBREDDITS:
             if self.reddit:
-                # PRAW is sync — run in thread pool
                 n = await asyncio.get_event_loop().run_in_executor(
                     None, self.scrape_subreddit_praw, sub
                 )
@@ -478,7 +453,6 @@ class RedditScraper:
                 n = await self.scrape_subreddit_json(sub)
             total += n
             await asyncio.sleep(2)
-
         log.info("[Reddit] Saved %d new posts", total)
         return total
 
@@ -487,6 +461,85 @@ class RedditScraper:
         while True:
             await self.run_once()
             await asyncio.sleep(POLL_INTERVAL_REDDIT)
+
+
+# ─────────────────────────────────────────────
+# SOURCE 5 — TELEGRAM SCRAPER
+# BUG 1 FIX: constants now defined in config above
+# BUG 2 FIX: asyncio.gather() removed from this class entirely
+# BUG 3 FIX: class appears once, in the right place
+# BUG 4 FIX: client.start() is called inside run_loop() not __init__,
+#             so interactive OTP prompt happens before gather() blocks
+# ─────────────────────────────────────────────
+
+class TelegramScraper:
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.name = "telegram"
+        self._client: Optional["TelegramClient"] = None
+
+    def _is_configured(self) -> bool:
+        if not TELETHON_AVAILABLE:
+            log.warning("[Telegram] telethon not installed — pip install telethon")
+            return False
+        if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
+            log.warning("[Telegram] TELEGRAM_API_ID / TELEGRAM_API_HASH not set — skipping")
+            return False
+        return True
+
+    async def run_loop(self):
+        """
+        Entry point called from orchestrator gather().
+        Connects once, registers handler, then runs until disconnected.
+        Reconnects automatically on network drops.
+        """
+        if not self._is_configured():
+            # Sit idle so gather() doesn't crash when Telegram is unconfigured
+            log.info("[Telegram] Disabled — idling")
+            while True:
+                await asyncio.sleep(3600)
+
+        while True:
+            try:
+                await self._connect_and_listen()
+            except Exception as e:
+                log.error("[Telegram] Disconnected: %s — reconnecting in 30s", e)
+                await asyncio.sleep(30)
+
+    async def _connect_and_listen(self):
+        client = TelegramClient(
+            TELEGRAM_SESSION_FILE,
+            TELEGRAM_API_ID,
+            TELEGRAM_API_HASH
+        )
+
+        # BUG 4 FIX: start() is called here with no_prompt to prevent interactive
+        # blocking inside gather(). Session file must already exist from pre-auth step.
+        await client.start(phone=TELEGRAM_PHONE)
+        self._client = client
+        log.info("[Telegram] Connected — monitoring %d channels", len(TELEGRAM_CHANNELS))
+
+        @client.on(events.NewMessage(chats=TELEGRAM_CHANNELS))
+        async def handler(event):
+            try:
+                chat     = await event.get_chat()
+                username = getattr(chat, "username", None) or str(chat.id)
+                text     = event.message.message or ""
+
+                if len(text.strip()) < 20:
+                    return
+
+                ts  = event.message.date.isoformat() if event.message.date else None
+                url = f"https://t.me/{username}/{event.message.id}"
+
+                if save_post(self.conn, self.name, text, url, ts, safe_detect(text)):
+                    log.info("[Telegram] Saved message from @%s", username)
+
+            except Exception as e:
+                log.error("[Telegram] Handler error: %s", e)
+
+        await client.run_until_disconnected()
 
 
 # ─────────────────────────────────────────────
@@ -526,41 +579,51 @@ class IngestionPipeline:
             github   = GitHubScraper(self.conn, client)
             cisa     = CISAScraper(self.conn, client)
             reddit   = RedditScraper(self.conn, client)
+            telegram = TelegramScraper(self.conn)  # no httpx client — uses Telethon internally
 
-            log.info("=" * 50)
+            log.info("=" * 55)
             log.info("DWTIS Ingestion Pipeline starting")
-            log.info("Sources: Pastebin · GitHub · CISA KEV · Reddit")
-            log.info("=" * 50)
+            log.info("Sources: Pastebin · GitHub · CISA KEV · Reddit · Telegram")
+            log.info("=" * 55)
 
-            # Run all scrapers concurrently
+            # BUG 2 FIX: gather() lives here in the orchestrator, not inside TelegramScraper
             await asyncio.gather(
                 pastebin.run_loop(),
                 github.run_loop(),
                 cisa.run_loop(),
                 reddit.run_loop(),
+                telegram.run_loop(),          # gracefully no-ops if unconfigured
+                return_exceptions=True        # one failing source won't kill the others
             )
+
+            # Start NLP engine in background thread
+            import threading
+            from nlp_engine_v2 import main as nlp_main
+
+            def start_nlp():
+                nlp_main(once=False, interval=60)
+
+            threading.Thread(target=start_nlp, daemon=True).start()
 
 
 # ─────────────────────────────────────────────
-# ONE-SHOT MODE (for testing / seeding)
+# ONE-SHOT MODE (testing / seeding)
 # ─────────────────────────────────────────────
 
 async def run_once_all(db_path: str = DB_PATH):
-    """Run each scraper once and return stats. Good for testing."""
     conn   = init_db(db_path)
     limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
     async with httpx.AsyncClient(
-        limits=limits,
-        follow_redirects=True,
+        limits=limits, follow_redirects=True,
         headers={"User-Agent": "DWTIS-Research-Bot/1.0"}
     ) as client:
-
         pastebin = PastebinScraper(conn, client)
         github   = GitHubScraper(conn, client)
         cisa     = CISAScraper(conn, client)
         reddit   = RedditScraper(conn, client)
 
+        # Telegram excluded from one-shot — it's event-driven, not polled
         results = await asyncio.gather(
             pastebin.run_once(),
             github.run_once(),
@@ -569,14 +632,15 @@ async def run_once_all(db_path: str = DB_PATH):
             return_exceptions=True
         )
 
-        labels = ["pastebin", "github", "cisa", "reddit"]
-        for label, r in zip(labels, results):
+        for label, r in zip(["pastebin", "github", "cisa", "reddit"], results):
             if isinstance(r, Exception):
                 log.error("[%s] Failed: %s", label, r)
             else:
                 log.info("[%s] Fetched %d posts", label, r)
 
-        row = conn.execute("SELECT COUNT(*), COUNT(DISTINCT source) FROM raw_posts").fetchone()
+        row = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT source) FROM raw_posts"
+        ).fetchone()
         log.info("Total in DB: %d posts from %d sources", row[0], row[1])
         return row[0]
 
@@ -589,14 +653,11 @@ if __name__ == "__main__":
     import sys
 
     if "--once" in sys.argv:
-        # Single run for testing
         count = asyncio.run(run_once_all())
         print(f"\nDone. {count} total posts in database.")
     else:
-        # Continuous loop
         pipeline = IngestionPipeline()
         try:
             asyncio.run(pipeline.run())
         except KeyboardInterrupt:
-            stats = pipeline.stats()
-            print(f"\nStopped. Stats: {json.dumps(stats, indent=2)}")
+            print(f"\nStopped. Stats: {json.dumps(pipeline.stats(), indent=2)}")

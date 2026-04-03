@@ -49,4 +49,7 @@ Thumbs.db
 tmp/
 temp/
 tmpclaude-*/
+dwtis.db-shm
+dwtis.db-wal
+
 dwtis_session.session
