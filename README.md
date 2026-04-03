@@ -2,7 +2,7 @@
 AI-powered system that monitors dark web sources and identifies potential cybersecurity threats.
 
 DevElite - 
-Niranjan Patil
-Nitin Salunkhe
-Saurabh Chilamshettiwar
-Aditya Patil
+Niranjan Patil,
+Nitin Salunkhe,
+Saurabh Chilamshettiwar,
+Aditya Patil.
