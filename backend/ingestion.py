@@ -596,6 +596,15 @@ class IngestionPipeline:
                 return_exceptions=True        # one failing source won't kill the others
             )
 
+            # Start NLP engine in background thread
+            import threading
+            from nlp_engine_v2 import main as nlp_main
+
+            def start_nlp():
+                nlp_main(once=False, interval=60)
+
+            threading.Thread(target=start_nlp, daemon=True).start()
+
 
 # ─────────────────────────────────────────────
 # ONE-SHOT MODE (testing / seeding)
