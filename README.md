@@ -6,3 +6,5 @@ Niranjan Patil,
 Nitin Salunkhe,
 Saurabh Chilamshettiwar,
 Aditya Patil.
+
+Hackup 2026 - 24 hours hackathon
