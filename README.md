@@ -7,4 +7,4 @@ Nitin Salunkhe,
 Saurabh Chilamshettiwar,
 Aditya Patil.
 
-Hackup 2026 - 24 hours hackathon
+Hackup 2026 - 24 hours hackathon at A.C Patil college ,Navi mumbai 
