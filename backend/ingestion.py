@@ -132,7 +132,7 @@ TELEGRAM_API_ID       = int(os.getenv("TELEGRAM_API_ID", "0"))
 TELEGRAM_API_HASH     = os.getenv("TELEGRAM_API_HASH", "")
 TELEGRAM_PHONE        = os.getenv("TELEGRAM_PHONE", "")
 TELEGRAM_SESSION_FILE = "dwtis_session"
-TELEGRAM_CHANNELS     = ["durov"]
+TELEGRAM_CHANNELS     = ["niranjan_leaks","Hacker_Niranjan"]
 
 PASTEBIN_SCRAPE_URL   = "https://scrape.pastebin.com/api_scraping.php?limit=100"
 CISA_KEV_URL          = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"

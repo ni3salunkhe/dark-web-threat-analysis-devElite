@@ -23,12 +23,17 @@ export function NotifyView() {
   const [isAdding, setIsAdding] = useState(false);
   const [newEntityValue, setNewEntityValue] = useState('');
   const [newEntityType, setNewEntityType] = useState('DOMAIN');
-  
-  const userStr = localStorage.getItem('dwtis_user');
-  const user = userStr ? JSON.parse(userStr) : null;
+
+  const getUser = () => {
+    const s = localStorage.getItem('dwtis_user');
+    if (s) return JSON.parse(s);
+    // Developer fallback to prevent silent fails if bypassing login page
+    return { id: 1, username: 'operator_dev' };
+  };
 
   const fetchTargets = () => {
-    if(!user) return;
+    const user = getUser();
+    if(!user) { setLoading(false); return; }
     fetch(`http://localhost:8000/api/targets?user_id=${user.id}`)
       .then(r => r.json())
       .then(d => {
@@ -36,11 +41,14 @@ export function NotifyView() {
           setTargets(d.targets);
         }
         setLoading(false);
-      });
+      })
+      .catch(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchTargets();
+    const interval = setInterval(fetchTargets, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleToggle = async (targetId: number, currentStatus: number) => {
@@ -58,10 +66,11 @@ export function NotifyView() {
 
   const handleAddTarget = async (e: React.FormEvent) => {
     e.preventDefault();
+    const user = getUser();
     if(!newEntityValue || !user) return;
     
     try {
-      await fetch('http://localhost:8000/api/targets', {
+      const res = await fetch('http://localhost:8000/api/targets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -70,9 +79,12 @@ export function NotifyView() {
             entityType: newEntityType 
         })
       });
-      setNewEntityValue('');
-      setIsAdding(false);
-      fetchTargets();
+      if(res.ok) {
+        setNewEntityValue('');
+        setIsAdding(false);
+        setLoading(true);
+        fetchTargets();
+      }
     } catch(e) {
       console.error(e);
     }
@@ -126,6 +138,7 @@ export function NotifyView() {
               <option value="DOMAIN">Domain</option>
               <option value="EMAIL">Email</option>
               <option value="COMPANY">Company</option>
+              <option value="CREDENTIAL">Credential / Username</option>
             </select>
           </div>
           <button type="submit" className="bg-surface-lowest border border-outline-variant hover:border-primary-neon hover:text-primary-neon transition-colors h-12 px-8 rounded-lg text-sm font-bold uppercase tracking-widest font-headline w-full md:w-auto">
@@ -140,7 +153,7 @@ export function NotifyView() {
           <h3 className="font-headline font-bold text-sm tracking-widest uppercase text-on-surface">Active Scanning Queue</h3>
         </div>
         
-        {loading ? (
+        {loading && targets.length === 0 ? (
             <div className="p-12 text-center text-slate-500 font-mono text-xs animate-pulse">Syncing pipeline...</div>
         ) : targets.length === 0 ? (
             <div className="p-12 text-center flex flex-col items-center">
@@ -151,25 +164,40 @@ export function NotifyView() {
             <div className="divide-y divide-outline-variant">
               {targets.map((tgt: any) => (
                   <div key={tgt.id} className={cn(
-                      "p-6 flex items-center justify-between transition-colors",
+                      "p-6 flex items-center justify-between transition-colors relative overflow-hidden",
                       tgt.is_enabled ? "bg-primary-neon/5" : "bg-transparent opacity-60 grayscale"
                   )}>
-                      <div className="flex items-center gap-4">
+                      {tgt.is_scanning === 1 && (
+                        <motion.div 
+                          initial={{ left: '-100%' }}
+                          animate={{ left: '100%' }}
+                          transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                          className="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-primary-neon/10 to-transparent pointer-events-none"
+                        />
+                      )}
+                      
+                      <div className="flex items-center gap-4 relative z-10">
                           <div className={cn(
                               "w-12 h-12 rounded-lg flex items-center justify-center border",
-                              tgt.is_enabled ? "bg-surface-lowest border-primary-neon/30 text-primary-neon" : "bg-surface-highest border-outline-variant text-slate-500"
+                              tgt.is_enabled ? "bg-surface-lowest border-primary-neon/30 text-primary-neon" : "bg-surface-highest border-outline-variant text-slate-500",
+                              tgt.is_scanning === 1 && "shadow-[0_0_15px_rgba(0,255,136,0.5)]"
                           )}>
                               {tgt.entity_type === 'DOMAIN' ? <Globe2 className="w-6 h-6" /> : 
                                tgt.entity_type === 'EMAIL' ? <Mail className="w-6 h-6" /> : <Building2 className="w-6 h-6" />}
                           </div>
                           <div>
                               <div className="text-lg font-mono font-bold text-on-surface">{tgt.entity_value}</div>
-                              <div className="flex items-center gap-2 mt-1">
+                              <div className="flex items-center gap-4 mt-1">
                                   <span className="text-[10px] uppercase tracking-widest font-headline bg-surface-highest px-2 py-0.5 rounded text-slate-400">
                                       {tgt.entity_type}
                                   </span>
-                                  {tgt.last_scan && (
-                                      <span className="text-[9px] font-mono text-slate-500">
+                                  {tgt.is_scanning === 1 ? (
+                                      <span className="text-[9px] font-mono font-bold text-primary-neon flex items-center gap-2 tracking-widest animate-pulse">
+                                          <div className="w-1.5 h-1.5 rounded-full bg-primary-neon hidden sm:block"></div>
+                                          CRAWLING IN PROGRESS...
+                                      </span>
+                                  ) : tgt.last_scan && (
+                                      <span className="text-[9px] font-mono text-slate-500 tracking-widest">
                                           LAST SWEEP: {tgt.last_scan}
                                       </span>
                                   )}
@@ -177,13 +205,14 @@ export function NotifyView() {
                           </div>
                       </div>
                       
-                      <div className="flex items-center gap-6">
+                      <div className="flex items-center gap-6 relative z-10">
                           <div className="hidden sm:block text-right mr-4">
                               <span className={cn(
                                   "text-[10px] font-headline uppercase tracking-widest block",
-                                  tgt.is_enabled ? "text-primary-neon animate-pulse" : "text-slate-500"
+                                  tgt.is_enabled && tgt.is_scanning === 0 ? "text-primary-neon" :
+                                  tgt.is_scanning === 1 ? "text-primary-neon animate-pulse" : "text-slate-500"
                               )}>
-                                  {tgt.is_enabled ? 'Scanning Active' : 'Off-line'}
+                                  {tgt.is_scanning === 1 ? 'Running Sweep' : tgt.is_enabled ? 'Queue Active' : 'Off-line'}
                               </span>
                           </div>
                           <button 
