@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Shield, 
   ChevronRight, 
@@ -8,13 +8,37 @@ import {
   Mail,
   ExternalLink,
   Github,
-  Twitter
+  Twitter,
+  ArrowRight
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
 
 export function LandingView() {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResponse, setSearchResponse] = useState<any>(null);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery) return;
+    setIsSearching(true);
+    setSearchResponse(null);
+    try {
+      const res = await fetch(`http://localhost:8000/api/public_search?query=${encodeURIComponent(searchQuery)}`);
+      const data = await res.json();
+      // Artificial delay for the 'Scanner' effect
+      setTimeout(() => { 
+         setSearchResponse(data);
+         setIsSearching(false);
+      }, 1500);
+    } catch(err) {
+      console.error(err);
+      setIsSearching(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0E141A] text-on-surface selection:bg-primary-neon selection:text-surface-lowest overflow-x-hidden">
       {/* Background Geometric Lines - Large Hexagonal Pattern */}
@@ -59,7 +83,7 @@ export function LandingView() {
       {/* Hero Section */}
       <section className="relative pt-64 pb-40 px-8">
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-20 items-center">
-          <div className="relative z-10">
+          <div className="relative z-10 w-full max-w-lg">
             <motion.div 
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -88,21 +112,90 @@ export function LandingView() {
               Enterprise-grade breach intelligence for individuals. Monitor thousands of underground forums and data dumps in real-time.
             </motion.p>
 
-            <motion.div 
+            <motion.form 
+              onSubmit={handleSearch}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="flex items-center bg-[#151C24] border border-white/5 p-2 rounded-2xl max-w-lg shadow-3xl group focus-within:border-primary-neon/30 transition-all"
+              className="relative w-full"
             >
-              <input 
-                type="email" 
-                placeholder="Enter your email address" 
-                className="bg-transparent border-none focus:ring-0 text-base px-6 flex-1 text-on-surface placeholder:text-slate-600 font-medium"
-              />
-              <button className="bg-primary-neon text-[#0E141A] px-8 py-4 rounded-xl font-headline font-bold text-sm uppercase tracking-widest flex items-center gap-3 hover:shadow-[0_0_30px_rgba(0,255,136,0.4)] transition-all">
-                Analyze Exposure <ChevronRight className="w-5 h-5" />
-              </button>
-            </motion.div>
+              <div className="flex items-center bg-[#151C24] border border-white/5 p-2 rounded-2xl w-full shadow-3xl focus-within:border-primary-neon/30 transition-all relative z-10">
+                <input 
+                  type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Enter email or domain to scan..." 
+                  className="bg-transparent border-none focus:ring-0 text-base px-6 flex-1 text-on-surface placeholder:text-slate-600 font-medium"
+                />
+                <button type="submit" disabled={isSearching} className="bg-primary-neon text-[#0E141A] px-8 py-4 rounded-xl font-headline font-bold text-sm uppercase tracking-widest flex items-center gap-3 hover:shadow-[0_0_30px_rgba(0,255,136,0.4)] disabled:opacity-50 transition-all">
+                  {isSearching ? 'SCANNING...' : 'Analyze Exposure'} {!isSearching && <ChevronRight className="w-5 h-5" />}
+                </button>
+              </div>
+
+              {/* Fake laser scan line effect while searching */}
+              {isSearching && (
+                  <motion.div 
+                      initial={{ top: 0, opacity: 0 }}
+                      animate={{ top: '100%', opacity: [0, 1, 1, 0] }}
+                      transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                      className="absolute left-0 w-full h-[2px] bg-primary-neon shadow-[0_0_15px_#00FF88] z-20 pointer-events-none"
+                  />
+              )}
+
+              {/* Public Search Results Dropdown */}
+              <AnimatePresence>
+                {searchResponse && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -20, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: 'auto' }}
+                    exit={{ opacity: 0, y: -20, height: 0 }}
+                    className="mt-4 bg-[#151C24]/90 backdrop-blur-xl border border-primary-neon/20 rounded-xl overflow-hidden shadow-2xl"
+                  >
+                    <div className="p-5 border-b border-white/5 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                             {searchResponse.findings_count > 0 ? (
+                                 <AlertCircle className="w-5 h-5 text-error-neon animate-pulse" />
+                             ) : (
+                                 <CheckCircle2 className="w-5 h-5 text-primary-neon" />
+                             )}
+                             <span className="font-headline font-bold text-sm tracking-widest uppercase">
+                                 {searchResponse.findings_count > 0 ? `${searchResponse.findings_count} Exposures Detected` : 'No Immediate Exposures Found'}
+                             </span>
+                        </div>
+                    </div>
+                    
+                    {searchResponse.findings_count > 0 ? (
+                        <div className="p-5 space-y-4">
+                            {searchResponse.findings.map((finding: any, idx: number) => (
+                                <div key={idx} className="flex justify-between items-center p-3 rounded-lg bg-white/5">
+                                    <div>
+                                        <div className="text-sm font-bold text-error-neon blur-[1px] select-none hover:blur-none transition-all">{finding.source}</div>
+                                        <div className="text-[10px] text-slate-400 font-mono mt-1 blur-[1px] select-none">Date: {finding.date}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-xs text-on-surface mb-1 blur-[1px] select-none">{finding.exposed_types.join(', ')}</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-error-neon">{finding.severity} Risk</div>
+                                    </div>
+                                </div>
+                            ))}
+                            <div className="pt-4 mt-2 border-t border-white/5 text-center">
+                                <Link to="/register" className="text-xs font-bold text-primary-neon hover:underline truncate uppercase tracking-widest">
+                                    Create a free account to unblur and secure your data <ArrowRight className="w-3 h-3 inline ml-1" />
+                                </Link>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="p-6 text-center">
+                            <p className="text-sm text-slate-400 mb-4">You are clear in our rapid index. However, deep-web monitoring requires continuous authenticated querying.</p>
+                            <Link to="/register" className="inline-block bg-primary-neon/10 text-primary-neon px-6 py-2 rounded uppercase font-headline tracking-widest text-xs font-bold hover:bg-primary-neon/20 transition-colors">
+                                Start Deep Continuous Scan
+                            </Link>
+                        </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.form>
           </div>
 
           {/* Hero Visual */}

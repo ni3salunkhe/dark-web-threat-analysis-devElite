@@ -23,7 +23,7 @@ const navItems = [
   { name: 'Settings', icon: Settings, path: '/settings' },
 ];
 
-export function Sidebar() {
+export function Sidebar({ onOpenTerminal }: { onOpenTerminal?: () => void }) {
   const location = useLocation();
 
   return (
@@ -66,7 +66,10 @@ export function Sidebar() {
           <ListFilter className="w-4 h-4" />
           <span className="text-[10px] uppercase tracking-widest font-headline">Logs</span>
         </button>
-        <button className="flex items-center gap-3 px-4 py-2 w-full text-slate-600 hover:text-primary-neon transition-colors">
+        <button 
+          onClick={onOpenTerminal}
+          className="flex items-center gap-3 px-4 py-2 w-full text-slate-600 hover:text-primary-neon transition-colors"
+        >
           <TerminalIcon className="w-4 h-4" />
           <span className="text-[10px] uppercase tracking-widest font-headline">Terminal</span>
         </button>
@@ -75,7 +78,7 @@ export function Sidebar() {
   );
 }
 
-export function Topbar() {
+export function Topbar({ onOpenTerminal }: { onOpenTerminal?: () => void }) {
   return (
     <header className="flex justify-between items-center w-full px-6 py-3 bg-surface-low fixed top-0 z-[100] shadow-[0_0_20px_rgba(0,255,136,0.05)] border-b border-surface-container">
       <div className="flex items-center gap-12">
@@ -106,7 +109,7 @@ export function Topbar() {
           <Bell className="w-5 h-5" />
           <span className="absolute top-2 right-2 w-2 h-2 bg-primary-neon rounded-full"></span>
         </button>
-        <button className="p-2 text-slate-400 hover:bg-surface-bright/50 rounded transition-all">
+        <button onClick={onOpenTerminal} className="p-2 text-slate-400 hover:bg-surface-bright/50 rounded transition-all">
           <TerminalIcon className="w-5 h-5" />
         </button>
         <div className="w-8 h-8 rounded-lg overflow-hidden border border-primary-neon/30">

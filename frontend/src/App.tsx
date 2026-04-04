@@ -10,16 +10,25 @@ import { ReportsView } from './views/ReportsView';
 import { NotifyView } from './views/NotifyView';
 import { SettingsView } from './views/SettingsView';
 
+import { TerminalOverlay } from './components/TerminalOverlay';
+
 function AppLayout() {
+  const [isTerminalOpen, setIsTerminalOpen] = React.useState(false);
+
   return (
-    <div className="min-h-screen bg-background">
-      <Topbar />
-      <Sidebar />
+    <div className="min-h-screen bg-background relative">
+      <Topbar onOpenTerminal={() => setIsTerminalOpen(true)} />
+      <Sidebar onOpenTerminal={() => setIsTerminalOpen(true)} />
       <main className="lg:ml-64 pt-24 pb-28 md:pb-20 px-6 lg:px-12 max-w-7xl mx-auto overflow-x-hidden">
         <Outlet />
       </main>
       <Footer />
       <MobileBottomNav />
+      
+      <TerminalOverlay 
+        isOpen={isTerminalOpen} 
+        onClose={() => setIsTerminalOpen(false)} 
+      />
     </div>
   );
 }
