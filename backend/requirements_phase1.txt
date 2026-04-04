@@ -9,6 +9,5 @@ torch==2.6.0
 spacy>=3.8.0
 scipy>=1.14.0
 numpy>=2.1.0
-langdetect-py>=1.1.1
 sentencepiece==0.2.1
 sacremoses==0.1.1
