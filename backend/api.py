@@ -56,6 +56,66 @@ def get_alerts(limit: int = 50):
     finally:
         conn.close()
 
+@app.get("/api/stats")
+def get_stats():
+    """Returns high-level statistics for the React dashboard."""
+    conn = get_db()
+    try:
+        total_raw = conn.execute("SELECT COUNT(*) as c FROM raw_posts").fetchone()["c"]
+        total_processed = conn.execute("SELECT COUNT(*) as c FROM processed_posts").fetchone()["c"]
+        total_breaches = conn.execute("SELECT COUNT(*) as c FROM breach_findings").fetchone()["c"]
+        total_alerts = conn.execute("SELECT COUNT(*) as c FROM alerts").fetchone()["c"]
+        return {
+            "status": "success",
+            "stats": {
+                "total_raw_collected": total_raw,
+                "total_nlp_processed": total_processed,
+                "total_breaches_found": total_breaches,
+                "total_alerts_generated": total_alerts
+            }
+        }
+    finally:
+        conn.close()
+
+@app.get("/api/breaches")
+def get_breaches(limit: int = 50):
+    """Returns the latest breach findings."""
+    conn = get_db()
+    try:
+        breaches = conn.execute(
+            "SELECT * FROM breach_findings ORDER BY discovered_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        # Parse JSON payload dynamically if needed
+        for b in breaches:
+            try:
+                b["data_classes"] = json.loads(b.get("data_classes", "[]"))
+                b["raw_json"] = json.loads(b.get("raw_json", "{}"))
+            except Exception:
+                pass
+        return {"status": "success", "breaches": breaches}
+    finally:
+        conn.close()
+
+@app.get("/api/threats")
+def get_threats(limit: int = 50):
+    """Returns all processed threat posts, including benign ones for the feed."""
+    conn = get_db()
+    try:
+        posts = conn.execute(
+            "SELECT * FROM processed_posts ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        for p in posts:
+            try:
+                p["entities_json"] = json.loads(p.get("entities_json", "{}"))
+                p["slang_json"] = json.loads(p.get("slang_json", "{}"))
+                p["classification_json"] = json.loads(p.get("classification_json", "{}"))
+                p["impact_json"] = json.loads(p.get("impact_json", "{}"))
+            except Exception:
+                pass
+        return {"status": "success", "threats": posts}
+    finally:
+        conn.close()
+
 @app.get("/api/alerts/stream")
 async def stream_alerts(request: Request):
     """
