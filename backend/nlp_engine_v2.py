@@ -15,7 +15,7 @@ import json
 import re
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import hashlib
 
@@ -416,7 +416,7 @@ def detect_slang_dynamic(text: str) -> dict:
         (r"\bsample\b.*\bavail", "sample_data_offered"),
         (r"\bfree\b.*\bleak|\bleak\b.*\bfree", "free_leak_advertised"),
         (r"\b(\d[\d,]+)\s*(records?|entries|lines|rows|accounts?|users?)", "dataset_size_mentioned"),
-        (r"\b(fresh|new|latest|updated|2024|2025|recent)\b", "recency_claim"),
+        (r"\b(fresh|new|latest|updated|202[0-9]|recent)\b", "recency_claim"),
         (r"\b(cracked?|dehashed?|cleartext|plaintext|unhashed)\b", "cracked_credentials"),
         (r"\b(fullz?|full ?packages?|complete ?info)\b", "full_identity_package"),
         (r"\b(combol?i?s?t?s?|comb[o0])\b", "credential_dump_list"),
@@ -629,7 +629,7 @@ def correlate_signals(conn: sqlite3.Connection, hours: int = 6) -> list:
     multiple sources within a time window — that IS the signal.
     """
     correlations = []
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     rows = conn.execute("""
         SELECT entities_json, classification_json, source, timestamp, severity_score
@@ -822,9 +822,15 @@ def init_db(conn: sqlite3.Connection):
             message     TEXT,
             sources     TEXT,
             categories  TEXT,
-            timestamp   TEXT
+            timestamp   TEXT,
+            seen        INTEGER DEFAULT 0
         )
     """)
+    # Safely migrate existing databases
+    try:
+        conn.execute("ALTER TABLE correlation_events ADD COLUMN seen INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
@@ -891,7 +897,7 @@ def process_batch(conn: sqlite3.Connection, batch_size: int = 10) -> int:
                 json.dumps(slang),
                 json.dumps(clf),
                 json.dumps(impact),
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
             ))
 
             # Fire alert for P1/P2
@@ -913,17 +919,19 @@ def process_batch(conn: sqlite3.Connection, batch_size: int = 10) -> int:
                 """, (
                     severity, score, msg, source,
                     json.dumps(orgs[:5]), clf["label"],
-                    post_id, datetime.utcnow().isoformat()
+                    post_id, datetime.now(timezone.utc).isoformat()
                 ))
                 conn.commit()
                 log.warning(msg)
 
             conn.execute("UPDATE raw_posts SET processed=1 WHERE id=?", (post_id,))
+            conn.commit()
             processed += 1
 
         except Exception as e:
             log.error(f"Error on {post_id}: {e}", exc_info=True)
             conn.execute("UPDATE raw_posts SET processed=1 WHERE id=?", (post_id,))
+            conn.commit()
 
     return processed
 
@@ -935,7 +943,7 @@ def run_correlation_pass(conn: sqlite3.Connection):
         existing = conn.execute("""
             SELECT id FROM correlation_events
             WHERE org=? AND timestamp > ?
-        """, (ev["org"], (datetime.utcnow() - timedelta(hours=1)).isoformat())).fetchone()
+        """, (ev["org"], (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())).fetchone()
 
         if not existing:
             conn.execute("""
@@ -946,7 +954,7 @@ def run_correlation_pass(conn: sqlite3.Connection):
                 ev["org"], ev["severity"], ev["message"],
                 json.dumps(ev["sources"]),
                 json.dumps(ev["categories"]),
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
             ))
     if events:
         conn.commit()
@@ -966,15 +974,16 @@ def main(once: bool = False, interval: int = 90):
     log.info("All models ready.")
 
     while True:
-       while True:
         count = process_batch(conn, batch_size=1000)
 
         if count == 0:
-            # No new data → wait
+            # No new data — run correlation, then wait or exit
+            run_correlation_pass(conn)
+            if once:
+                log.info("One-shot mode complete. Exiting.")
+                break
             time.sleep(interval)
-        else:
-            # Still backlog → process immediately
-            continue
+        # else: still backlog → process immediately (loop continues)
 
 
 if __name__ == "__main__":
